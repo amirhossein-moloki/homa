@@ -1,18 +1,20 @@
 from django.db import models
 from django.conf import settings
 from mosque.models import Hall
+from services.models import AdditionalService
 
-class AdditionalService(models.Model):
-    name = models.CharField(max_length=100, verbose_name="نام خدمت")
-    description = models.TextField(blank=True, null=True, verbose_name="توضیحات")
-    price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="قیمت")
-
-    def __str__(self):
-        return self.name
+class ReservationService(models.Model):
+    reservation = models.ForeignKey('Reservation', on_delete=models.CASCADE, related_name='reservation_services')
+    service = models.ForeignKey(AdditionalService, on_delete=models.CASCADE, related_name='reservation_services')
+    quantity = models.PositiveIntegerField(default=1, verbose_name="تعداد")
 
     class Meta:
-        verbose_name = "خدمت جانبی"
-        verbose_name_plural = "خدمات جانبی"
+        verbose_name = "سرویس رزرو"
+        verbose_name_plural = "سرویس‌های رزرو"
+        unique_together = ('reservation', 'service')
+
+    def __str__(self):
+        return f"{self.quantity} x {self.service.name} for Reservation {self.reservation.id}"
 
 class Reservation(models.Model):
     class ReservationStatus(models.TextChoices):
@@ -43,6 +45,7 @@ class Reservation(models.Model):
     )
     services = models.ManyToManyField(
         AdditionalService,
+        through='ReservationService',
         blank=True,
         verbose_name="خدمات جانبی"
     )
