@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ReservationViewSet, MosqueAvailabilityAPIView
+from .views import ReservationViewSet, MosqueAvailabilityAPIView, PaymentCallbackView
 
 router = DefaultRouter()
 router.register(r'reservations', ReservationViewSet, basename='reservation')
@@ -8,4 +8,5 @@ router.register(r'reservations', ReservationViewSet, basename='reservation')
 urlpatterns = [
     path('', include(router.urls)),
     path('mosques/<int:mosque_id>/availability/', MosqueAvailabilityAPIView.as_view(), name='mosque-availability'),
+    path('payment/callback/', PaymentCallbackView.as_view(), name='payment-callback'),
 ]
