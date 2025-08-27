@@ -5,6 +5,7 @@ from mosque.serializers import HallSerializer
 from mosque.models import Hall
 from services.serializers import AdditionalServiceSerializer
 from services.models import AdditionalService
+from core.serializers import JalaliDateTimeField
 
 class ReservationServiceSerializer(serializers.ModelSerializer):
     service = AdditionalServiceSerializer(read_only=True)
@@ -20,6 +21,11 @@ class ReservationSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     hall = HallSerializer(read_only=True)
     reservation_services = ReservationServiceSerializer(many=True, required=False)
+    start_time = JalaliDateTimeField()
+    end_time = JalaliDateTimeField()
+    created_at = JalaliDateTimeField(read_only=True)
+    updated_at = JalaliDateTimeField(read_only=True)
+
 
     hall_id = serializers.PrimaryKeyRelatedField(
         queryset=Hall.objects.all(), source='hall', write_only=True
