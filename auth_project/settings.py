@@ -44,6 +44,8 @@ INSTALLED_APPS = [
 
     # local apps
     "users",
+    "mosque",
+    "cities",
     "drf_yasg",
 ]
 
