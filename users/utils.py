@@ -1,6 +1,6 @@
 import random
 from django.conf import settings
-from sms_ir import SmsIr
+from smsir.sms import SmsIr
 from .models import OTP
 
 def send_otp(phone_number: str):
