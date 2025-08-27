@@ -48,4 +48,5 @@ urlpatterns = [
     # API
     path("api/", include("cities.urls")),
     path("api/", include("mosque.urls")),
+    path("api/", include("reservation.urls")),
 ]
