@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "mosque",
     "cities",
     "reservation",
+    "services",
     "drf_yasg",
 ]
 

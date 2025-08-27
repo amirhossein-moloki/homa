@@ -1,15 +1,15 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q
 from django.utils import timezone
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
-from .models import Reservation, AdditionalService
+from .models import Reservation
 from .serializers import ReservationSerializer
 from mosque.models import Hall, Mosque
+from services.models import AdditionalService
 
 class ReservationViewSet(viewsets.ModelViewSet):
     """
@@ -24,63 +24,47 @@ class ReservationViewSet(viewsets.ModelViewSet):
         """
         return Reservation.objects.filter(user=self.request.user)
 
-    def create(self, request, *args, **kwargs):
+    def perform_create(self, serializer):
         """
-        Creates a new reservation after checking for time conflicts and calculating the total price.
+        Custom logic to calculate total price and check for time conflicts before saving.
         """
-        hall_id = request.data.get('hall_id')
-        start_time_str = request.data.get('start_time')
-        end_time_str = request.data.get('end_time')
-        service_ids = request.data.get('service_ids', [])
+        hall = serializer.validated_data['hall']
+        start_time = serializer.validated_data['start_time']
+        end_time = serializer.validated_data['end_time']
 
-        if not all([hall_id, start_time_str, end_time_str]):
-            return Response({'error': 'hall_id, start_time, and end_time are required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            hall = Hall.objects.get(id=hall_id)
-            start_time = datetime.fromisoformat(start_time_str)
-            end_time = datetime.fromisoformat(end_time_str)
-        except (Hall.DoesNotExist, ValueError) as e:
-            return Response({'error': f'Invalid input: {e}'}, status=status.HTTP_400_BAD_REQUEST)
-
+        # 1. Check for valid time range
         if start_time >= end_time or start_time < timezone.now():
-            return Response({'error': 'Invalid time range.'}, status=status.HTTP_400_BAD_REQUEST)
+            raise serializers.ValidationError({'error': 'Invalid time range.'})
 
-        # Check for time conflicts
+        # 2. Check for time conflicts
         conflicting_reservations = Reservation.objects.filter(
             hall=hall,
             status=Reservation.ReservationStatus.ACTIVE,
             start_time__lt=end_time,
             end_time__gt=start_time
         )
-
         if conflicting_reservations.exists():
-            return Response({'error': 'This time slot is already booked.'}, status=status.HTTP_409_CONFLICT)
+            raise serializers.ValidationError({'error': 'This time slot is already booked.'})
 
-        # Calculate total price
-        try:
-            duration_hours = (end_time - start_time).total_seconds() / 3600
-            total_price = Decimal(str(duration_hours)) * hall.price_per_hour
-        except InvalidOperation:
-            return Response({'error': 'Error in price calculation.'}, status=status.HTTP_400_BAD_REQUEST)
+        # 3. Calculate total price
+        # Hall price
+        duration_hours = (end_time - start_time).total_seconds() / 3600
+        total_price = Decimal(str(duration_hours)) * hall.price_per_hour
 
+        # Services price
+        services_data = self.request.data.get('reservation_services', [])
+        if services_data:
+            service_ids = [item['service_id'] for item in services_data]
+            services = AdditionalService.objects.in_bulk(service_ids)
 
-        services = AdditionalService.objects.filter(id__in=service_ids)
-        for service in services:
-            total_price += service.price
+            for item in services_data:
+                service = services.get(int(item['service_id']))
+                if service:
+                    quantity = item.get('quantity', 1)
+                    total_price += service.price * Decimal(quantity)
 
-        # Create reservation
-        reservation = Reservation.objects.create(
-            user=request.user,
-            hall=hall,
-            start_time=start_time,
-            end_time=end_time,
-            total_price=total_price
-        )
-        reservation.services.set(services)
-
-        serializer = self.get_serializer(reservation)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # 4. Save the reservation with the calculated price
+        serializer.save(user=self.request.user, total_price=total_price)
 
 
 class MosqueAvailabilityAPIView(APIView):

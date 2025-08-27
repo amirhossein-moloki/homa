@@ -6,7 +6,8 @@ from datetime import timedelta
 
 from users.models import CustomUser
 from mosque.models import Mosque, Hall, City
-from .models import Reservation, AdditionalService
+from .models import Reservation, ReservationService
+from services.models import AdditionalService
 from cities.models import Province
 
 class ReservationAPITests(APITestCase):
@@ -40,8 +41,10 @@ class ReservationAPITests(APITestCase):
         )
 
         # Create additional services
-        self.service1 = AdditionalService.objects.create(name="Flowers", price=20.00)
-        self.service2 = AdditionalService.objects.create(name="Sound System", price=30.00)
+        self.service1 = AdditionalService.objects.create(name="Flowers", price=20.00, is_active=True)
+        self.service2 = AdditionalService.objects.create(name="Sound System", price=30.00, is_active=True)
+        self.inactive_service = AdditionalService.objects.create(name="Inactive Service", price=10.00, is_active=False)
+
 
         # URLS
         self.reservations_url = reverse('reservation-list')
@@ -60,17 +63,38 @@ class ReservationAPITests(APITestCase):
             'hall_id': self.hall.id,
             'start_time': start_time.isoformat(),
             'end_time': end_time.isoformat(),
-            'service_ids': [self.service1.id]
+            'reservation_services': [
+                {'service_id': self.service1.id, 'quantity': 2},
+                {'service_id': self.service2.id, 'quantity': 1}
+            ]
         }
         response = self.client.post(self.reservations_url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Reservation.objects.count(), 1)
+        self.assertEqual(ReservationService.objects.count(), 2)
+
 
         reservation = Reservation.objects.first()
         self.assertEqual(reservation.user, self.user)
         self.assertEqual(reservation.hall, self.hall)
-        # Price: 2 hours * 50/hour + 20 (service1) = 120
-        self.assertEqual(reservation.total_price, 120.00)
+        # Price: (2 hours * 50/hour) + (2 * 20) + (1 * 30) = 100 + 40 + 30 = 170
+        self.assertEqual(reservation.total_price, 170.00)
+
+    def test_create_reservation_with_inactive_service(self):
+        start_time = timezone.now() + timedelta(days=1)
+        end_time = start_time + timedelta(hours=2)
+
+        data = {
+            'hall_id': self.hall.id,
+            'start_time': start_time.isoformat(),
+            'end_time': end_time.isoformat(),
+            'reservation_services': [
+                {'service_id': self.inactive_service.id, 'quantity': 1}
+            ]
+        }
+        response = self.client.post(self.reservations_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
 
     def test_create_reservation_time_conflict(self):
         # Create an existing active reservation
@@ -92,9 +116,10 @@ class ReservationAPITests(APITestCase):
             'hall_id': self.hall.id,
             'start_time': start_time2.isoformat(),
             'end_time': end_time2.isoformat(),
+            'reservation_services': []
         }
         response = self.client.post(self.reservations_url, data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data['error'], 'This time slot is already booked.')
 
     def test_create_reservation_invalid_time_range(self):
@@ -105,6 +130,7 @@ class ReservationAPITests(APITestCase):
             'hall_id': self.hall.id,
             'start_time': start_time.isoformat(),
             'end_time': end_time.isoformat(),
+            'reservation_services': []
         }
         response = self.client.post(self.reservations_url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
