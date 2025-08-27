@@ -46,6 +46,7 @@ urlpatterns = [
     path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
 
     # API
+    path("api/admin/", include("admin_panel.urls")),
     path("api/", include("cities.urls")),
     path("api/", include("mosque.urls")),
     path("api/", include("reservation.urls")),
