@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "reservation",
     "services",
     "drf_yasg",
+    "core",
 ]
 
 MIDDLEWARE = [
