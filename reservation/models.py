@@ -21,6 +21,7 @@ class Reservation(models.Model):
         PENDING = 'PENDING', 'در انتظار پرداخت'
         ACTIVE = 'ACTIVE', 'فعال'
         CANCELLED = 'CANCELLED', 'لغو شده'
+        FAILED = 'FAILED', 'پرداخت ناموفق'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -43,6 +44,7 @@ class Reservation(models.Model):
         default=ReservationStatus.PENDING,
         verbose_name="وضعیت"
     )
+    authority = models.CharField(max_length=100, blank=True, null=True, verbose_name="کد رهگیری پرداخت")
     services = models.ManyToManyField(
         AdditionalService,
         through='ReservationService',

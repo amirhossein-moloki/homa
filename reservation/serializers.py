@@ -19,7 +19,7 @@ class ReservationServiceSerializer(serializers.ModelSerializer):
 class ReservationSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     hall = HallSerializer(read_only=True)
-    reservation_services = ReservationServiceSerializer(many=True)
+    reservation_services = ReservationServiceSerializer(many=True, required=False)
 
     hall_id = serializers.PrimaryKeyRelatedField(
         queryset=Hall.objects.all(), source='hall', write_only=True
@@ -40,7 +40,7 @@ class ReservationSerializer(serializers.ModelSerializer):
             'updated_at',
             'hall_id',
         ]
-        read_only_fields = ['total_price', 'status', 'user']
+        read_only_fields = ['status', 'user', 'total_price']
 
     def create(self, validated_data):
         services_data = validated_data.pop('reservation_services')
