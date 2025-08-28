@@ -1,14 +1,17 @@
-import random
+import secrets
 from django.conf import settings
-from smsir.sms import SmsIr
+from sms_ir import SmsIr
 from .models import OTP
+import logging
+
+logger = logging.getLogger(__name__)
 
 def send_otp(phone_number: str):
     """
     Generates a 6-digit OTP, saves it to the OTP model, and sends it via SMS.ir.
     """
-    # Generate a random 6-digit code
-    code = str(random.randint(100000, 999999))
+    # Generate a cryptographically secure 6-digit code
+    code = str(secrets.randbelow(900000) + 100000)
 
     # Save the OTP to the database
     OTP.objects.create(phone_number=phone_number, code=code)
@@ -16,8 +19,8 @@ def send_otp(phone_number: str):
     # Send the OTP using sms.ir
     try:
         sms_ir = SmsIr(
-            api_key=settings.SMS_IR_API_KEY,
-            linenumber=settings.SMS_IR_LINE_NUMBER,
+            settings.SMS_IR_API_KEY,
+            settings.SMS_IR_LINE_NUMBER,
         )
 
         # The user's documentation shows `send_verify_code` needs parameters.
@@ -36,8 +39,8 @@ def send_otp(phone_number: str):
             parameters=parameters,
         )
 
-        print(f"OTP sent to {phone_number}: {code}") # For debugging
+        logger.info(f"OTP sent to {phone_number}")
         return True
     except Exception as e:
-        print(f"Failed to send OTP to {phone_number}: {e}")
+        logger.error(f"Failed to send OTP to {phone_number}: {e}")
         return False
