@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, serializers
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db import transaction
 from django.utils import timezone
 from datetime import datetime
 from decimal import Decimal
@@ -13,8 +14,7 @@ from .models import Reservation, ReservationService
 from .serializers import ReservationSerializer
 from mosque.models import Hall, Mosque
 from services.models import AdditionalService
-from zarinpal import ZarinPal
-from .config import Config
+from .payment import ZarinpalGateway
 
 
 class ReservationViewSet(viewsets.ModelViewSet):
@@ -28,95 +28,73 @@ class ReservationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Users can only see their own reservations.
+        Optimized with select_related and prefetch_related to prevent N+1 queries.
         """
-        return Reservation.objects.filter(user=self.request.user)
+        return Reservation.objects.filter(user=self.request.user).select_related(
+            "user", "hall"
+        ).prefetch_related("reservation_services__service")
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         validated_data = serializer.validated_data
 
-        hall = validated_data['hall']
-        start_time = validated_data['start_time']
-        end_time = validated_data['end_time']
-
-        # 1. Custom Validation
-        if start_time >= end_time or start_time < timezone.now():
-            raise serializers.ValidationError("Invalid time range.")
-
-        conflicting_reservations = Reservation.objects.filter(
-            hall=hall,
-            status=Reservation.ReservationStatus.ACTIVE,
-            start_time__lt=end_time,
-            end_time__gt=start_time
-        )
-        if conflicting_reservations.exists():
-            raise serializers.ValidationError("This time slot is already booked.")
-
-        # 2. Calculate total price
-        duration_hours = (end_time - start_time).total_seconds() / 3600
-        total_price = Decimal(str(duration_hours)) * hall.price_per_hour
-
-        services_data = validated_data.pop('reservation_services', [])
-        for service_item in services_data:
-            service = service_item['service']
-            quantity = service_item['quantity']
-            total_price += service.price * Decimal(quantity)
-
-        # 3. Manually create the reservation and related services
-        reservation = Reservation.objects.create(
-            user=request.user,
-            total_price=total_price,
-            **validated_data
-        )
-        for service_item in services_data:
-            ReservationService.objects.create(
-                reservation=reservation,
-                service=service_item['service'],
-                quantity=service_item['quantity']
-            )
-
-        # 4. Zarinpal Payment Integration
-        merchant_id = getattr(settings, 'ZARINPAL_MERCHANT_ID', 'YOUR_MERCHANT_ID')
-        config = Config(merchant_id=merchant_id, sandbox=True)
-        zarinpal = ZarinPal(config)
-
-        amount = int(reservation.total_price)
-        if amount < 10000:
-            amount = 10000
-
-        callback_url = request.build_absolute_uri(reverse('payment-callback'))
-        payment_data = {
-            "amount": amount,
-            "callback_url": callback_url,
-            "description": f"Reservation for {reservation.hall.name} - ID: {reservation.id}",
-            "email": getattr(reservation.user, 'email', ''),
-            "mobile": getattr(reservation.user, 'phone_number', ''),
-        }
-
         try:
-            res = zarinpal.payments.create(payment_data)
-        except Exception as e:
-            reservation.status = Reservation.ReservationStatus.FAILED
-            reservation.save()
-            return Response(
-                {"error": "Payment gateway connection error.", "details": str(e)},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+            with transaction.atomic():
+                hall = validated_data['hall']
+                start_time = validated_data['start_time']
+                end_time = validated_data['end_time']
 
-        if res.get("data") and res.get("data", {}).get("authority"):
-            authority = res["data"]["authority"]
-            reservation.authority = authority
-            reservation.save()
-            payment_url = zarinpal.payments.generate_payment_url(authority)
-            return Response({'payment_url': payment_url, 'reservation_id': reservation.id}, status=status.HTTP_201_CREATED)
-        else:
-            reservation.status = Reservation.ReservationStatus.FAILED
-            reservation.save()
-            error_details = res.get("errors", "Unknown error from payment gateway.")
+                # 1. Validation is handled in the serializer.
+
+                # 2. Calculate total price
+                duration_hours = (end_time - start_time).total_seconds() / 3600
+                total_price = Decimal(str(duration_hours)) * hall.price_per_hour
+
+                services_data = validated_data.pop('reservation_services', [])
+                for service_item in services_data:
+                    service = service_item['service']
+                    quantity = service_item['quantity']
+                    total_price += service.price * Decimal(quantity)
+
+                # 3. Create reservation and related services
+                # Pop hall_id as it's not a field in Reservation model directly
+                validated_data.pop('hall_id', None)
+                reservation = Reservation.objects.create(
+                    user=request.user,
+                    total_price=total_price,
+                    hall=hall,
+                    start_time=start_time,
+                    end_time=end_time
+                )
+                for service_item in services_data:
+                    ReservationService.objects.create(
+                        reservation=reservation,
+                        service=service_item['service'],
+                        quantity=service_item['quantity']
+                    )
+
+                # 4. Zarinpal Payment Integration using the gateway
+                gateway = ZarinpalGateway(request=request)
+                payment_url, authority = gateway.create_payment_request(reservation)
+
+                reservation.authority = authority
+                reservation.save()
+
+                # The transaction will commit here upon successful exit of the `with` block
+                return Response(
+                    {'payment_url': payment_url, 'reservation_id': reservation.id},
+                    status=status.HTTP_201_CREATED
+                )
+        except Exception as e:
+            # This will catch both connection errors to Zarinpal and the validation error raised above
+            # The transaction is automatically rolled back on any exception
+            if isinstance(e, serializers.ValidationError):
+                return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+
             return Response(
-                {"error": "Could not get payment authority.", "details": error_details},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "An unexpected error occurred.", "details": str(e)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
 
@@ -188,52 +166,31 @@ class PaymentCallbackView(APIView):
             )
 
         if status_param == 'OK':
-            merchant_id = getattr(settings, 'ZARINPAL_MERCHANT_ID', 'YOUR_MERCHANT_ID')
-            config = Config(merchant_id=merchant_id, sandbox=True)
-            zarinpal = ZarinPal(config)
-
-            amount = int(reservation.total_price)
-            if amount < 10000:
-                amount = 10000
-
-            verification_data = {
-                "amount": amount,
-                "authority": authority,
-            }
-
+            gateway = ZarinpalGateway()
             try:
-                res = zarinpal.verifications.verify(verification_data)
-            except Exception as e:
-                 reservation.status = Reservation.ReservationStatus.FAILED
-                 reservation.save()
-                 return Response(
-                    {"error": "Payment verification failed during communication with the gateway.", "details": str(e)},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE
-                )
-
-            if res.get("data") and res["data"].get("code") == 100:
-                reservation.status = Reservation.ReservationStatus.ACTIVE
-                reservation.save()
-                return Response(
-                    {"message": "Payment successful and reservation is now active.", "ref_id": res["data"]["ref_id"]},
-                    status=status.HTTP_200_OK
-                )
-            elif res.get("data") and res["data"].get("code") == 101:
-                if reservation.status == Reservation.ReservationStatus.PENDING:
+                is_successful, details = gateway.verify_payment(reservation, authority)
+                if is_successful:
                     reservation.status = Reservation.ReservationStatus.ACTIVE
                     reservation.save()
-                return Response(
-                    {"message": "Payment was already verified."},
-                    status=status.HTTP_200_OK
-                )
-            else:
+                    return Response(
+                        {"message": "Payment successful and reservation is now active.", "ref_id": details},
+                        status=status.HTTP_200_OK
+                    )
+                else:
+                    reservation.status = Reservation.ReservationStatus.FAILED
+                    reservation.save()
+                    return Response(
+                        {"error": "Payment verification failed.", "details": details},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except Exception as e:
+                # In case of communication error with Zarinpal during verification
                 reservation.status = Reservation.ReservationStatus.FAILED
                 reservation.save()
-                error_details = res.get("errors") or res.get("data")
                 return Response(
-                    {"error": "Payment verification failed.", "details": error_details},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                   {"error": "Payment verification failed during communication with the gateway.", "details": str(e)},
+                   status=status.HTTP_503_SERVICE_UNAVAILABLE
+               )
         else:
             reservation.status = Reservation.ReservationStatus.FAILED
             reservation.save()
