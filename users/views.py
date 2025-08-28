@@ -9,10 +9,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .serializers import UserSerializer
-from ratelimit.decorators import ratelimit
-from django.utils.decorators import method_decorator
 
-@method_decorator(ratelimit(key='ip', rate='5/m', block=True), name='post')
+
 class RequestOTP(APIView):
     @swagger_auto_schema(
         operation_summary="ارسال کد تایید",
@@ -33,7 +31,7 @@ class RequestOTP(APIView):
         else:
             return Response({'error': 'خطا در ارسال کد تایید.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@method_decorator(ratelimit(key='ip', rate='5/m', block=True), name='post')
+
 class VerifyOTP(APIView):
     @swagger_auto_schema(
         operation_summary="تایید کد ارسال شده",

@@ -1,5 +1,5 @@
 """
-URL configuration for auth_project project.
+URL configuration for Homa project.
 
 The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/5.2/topics/http/urls/
@@ -50,4 +50,5 @@ urlpatterns = [
     path("api/", include("cities.urls")),
     path("api/", include("mosque.urls")),
     path("api/", include("reservation.urls")),
+    path("api/", include("services.urls")),
 ]
