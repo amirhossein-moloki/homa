@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,12 +21,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-$0(058_old##r+9=y$(p4_s6253nm&7-cmcn!%2@r_@ejnf7cm"
+SECRET_KEY = config("SECRET_KEY", default="django-insecure-$0(058_old##r+9=y$(p4_s6253nm&7-cmcn!%2@r_@ejnf7cm")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config("DEBUG", default=True, cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', cast=lambda v: [s.strip() for s in v.split(',')], default="127.0.0.1,localhost")
 
 
 # Application definition
@@ -41,6 +42,8 @@ INSTALLED_APPS = [
     # 3rd party apps
     "rest_framework",
     "djoser",
+    "decouple",
+    "ratelimit",
 
     # local apps
     "admin_panel",
@@ -156,6 +159,6 @@ DJOSER = {
 }
 
 # SMS.ir settings
-SMS_IR_API_KEY = 'YOUR_API_KEY'
-SMS_IR_LINE_NUMBER = 'YOUR_LINE_NUMBER'
-SMS_IR_OTP_TEMPLATE_ID = 'YOUR_TEMPLATE_ID'
+SMS_IR_API_KEY = config("SMS_IR_API_KEY", default="YOUR_API_KEY")
+SMS_IR_LINE_NUMBER = config("SMS_IR_LINE_NUMBER", default="YOUR_LINE_NUMBER")
+SMS_IR_OTP_TEMPLATE_ID = config("SMS_IR_OTP_TEMPLATE_ID", default="YOUR_TEMPLATE_ID")
