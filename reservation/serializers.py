@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 from .models import Reservation, ReservationService
 from users.serializers import UserSerializer
@@ -48,8 +49,44 @@ class ReservationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['status', 'user', 'total_price']
 
+    def validate(self, attrs):
+        start_time = attrs.get('start_time')
+        end_time = attrs.get('end_time')
+        hall = attrs.get('hall')
+
+        # This logic is primarily for creation. `hall`, `start_time`, and `end_time` are required.
+        if not all([hall, start_time, end_time]):
+            # This will likely be caught by field-level validation, but it's a safeguard.
+            return attrs
+
+        if start_time >= end_time:
+            raise serializers.ValidationError("End time must be after start time.")
+
+        # For new reservations, check if the start time is in the past.
+        # For updates, this check might not be desired, but we'll keep it for now.
+        if start_time < timezone.now():
+            raise serializers.ValidationError("Reservation start time cannot be in the past.")
+
+        # Check for booking conflicts
+        conflicting_reservations = Reservation.objects.filter(
+            hall=hall,
+            status=Reservation.ReservationStatus.ACTIVE,
+            start_time__lt=end_time,
+            end_time__gt=start_time
+        )
+
+        # If updating an existing reservation, exclude it from the conflict check.
+        if self.instance:
+            conflicting_reservations = conflicting_reservations.exclude(pk=self.instance.pk)
+
+        if conflicting_reservations.exists():
+            raise serializers.ValidationError("This time slot is already booked.")
+
+        return attrs
+
     def create(self, validated_data):
-        services_data = validated_data.pop('reservation_services')
+        services_data = validated_data.pop('reservation_services', []) # Use default empty list
+        # The view will calculate the price and add the user
         reservation = Reservation.objects.create(**validated_data)
         for service_data in services_data:
             ReservationService.objects.create(reservation=reservation, **service_data)

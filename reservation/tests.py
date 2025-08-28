@@ -12,6 +12,11 @@ from .models import Reservation, ReservationService
 from services.models import AdditionalService
 from cities.models import Province
 
+# The path to patch is where the class is *looked up*, which is in the views module.
+# So, we patch 'reservation.views.ZarinpalGateway'
+ZARINPAL_GATEWAY_PATH = 'reservation.views.ZarinpalGateway'
+
+
 class ReservationAPITests(APITestCase):
     def setUp(self):
         self.province = Province.objects.create(name="Test Province")
@@ -43,11 +48,11 @@ class ReservationAPITests(APITestCase):
         response = self.client.post(self.reservations_url, {})
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    @patch('reservation.views.ZarinPal')
-    def test_create_reservation_success(self, MockZarinPal):
-        mock_zarinpal_instance = MockZarinPal.return_value
-        mock_zarinpal_instance.payments.create.return_value = {"data": {"authority": "TEST_AUTHORITY_123"}, "errors": []}
-        mock_zarinpal_instance.payments.generate_payment_url.return_value = "https://sandbox.zarinpal.com/pg/TEST_AUTHORITY_123"
+    @patch(ZARINPAL_GATEWAY_PATH)
+    def test_create_reservation_success(self, MockZarinpalGateway):
+        # The mock gateway's create_payment_request should return a tuple (payment_url, authority)
+        mock_gateway_instance = MockZarinpalGateway.return_value
+        mock_gateway_instance.create_payment_request.return_value = ("https://sandbox.zarinpal.com/pg/TEST_AUTHORITY_123", "TEST_AUTHORITY_123")
 
         start_time = timezone.now() + timedelta(days=1)
         end_time = start_time + timedelta(hours=2)
@@ -93,7 +98,7 @@ class ReservationAPITests(APITestCase):
         response = self.client.post(self.reservations_url, data, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data[0], 'This time slot is already booked.')
+        self.assertIn('This time slot is already booked.', response.data.get('non_field_errors', []))
 
     def test_create_reservation_invalid_time_range(self):
         start_time = timezone.now() + timedelta(days=1)
@@ -102,7 +107,40 @@ class ReservationAPITests(APITestCase):
         response = self.client.post(self.reservations_url, data, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data[0], 'Invalid time range.')
+        # Convert ErrorDetail objects to strings for comparison
+        errors = [str(e) for e in response.data.get('non_field_errors', [])]
+        self.assertIn("End time must be after start time.", errors)
+
+    def test_create_reservation_start_time_in_past(self):
+        start_time = timezone.now() - timedelta(days=1)
+        end_time = start_time + timedelta(hours=2)
+        data = {'hall_id': self.hall.id, 'start_time': start_time.isoformat(), 'end_time': end_time.isoformat()}
+        response = self.client.post(self.reservations_url, data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # Convert ErrorDetail objects to strings for comparison
+        errors = [str(e) for e in response.data.get('non_field_errors', [])]
+        self.assertIn("Reservation start time cannot be in the past.", errors)
+
+    @patch(ZARINPAL_GATEWAY_PATH)
+    def test_create_reservation_gateway_fails_rolls_back(self, MockZarinpalGateway):
+        mock_gateway_instance = MockZarinpalGateway.return_value
+        mock_gateway_instance.create_payment_request.side_effect = Exception("Gateway connection error")
+
+        start_time = timezone.now() + timedelta(days=1)
+        end_time = start_time + timedelta(hours=2)
+        data = {'hall_id': self.hall.id, 'start_time': start_time.isoformat(), 'end_time': end_time.isoformat()}
+
+        # Ensure no reservations exist before the test
+        self.assertEqual(Reservation.objects.count(), 0)
+
+        response = self.client.post(self.reservations_url, data, format='json')
+
+        # The view should catch the exception and return a 503
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # The transaction should be rolled back, so no reservation should be created
+        self.assertEqual(Reservation.objects.count(), 0)
 
     def test_get_mosque_availability(self):
         target_date = timezone.now().date() + timedelta(days=5)
@@ -134,10 +172,11 @@ class PaymentCallbackTests(APITestCase):
         )
         self.callback_url = reverse('payment-callback')
 
-    @patch('reservation.views.ZarinPal')
-    def test_callback_success(self, MockZarinPal):
-        mock_zarinpal_instance = MockZarinPal.return_value
-        mock_zarinpal_instance.verifications.verify.return_value = {"data": {"code": 100, "ref_id": "REF123"}, "errors": []}
+    @patch(ZARINPAL_GATEWAY_PATH)
+    def test_callback_success(self, MockZarinpalGateway):
+        mock_gateway_instance = MockZarinpalGateway.return_value
+        # verify_payment should return (True, ref_id) on success
+        mock_gateway_instance.verify_payment.return_value = (True, "REF123")
 
         response = self.client.get(f"{self.callback_url}?Authority=TEST_CALLBACK_AUTH&Status=OK")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -145,10 +184,11 @@ class PaymentCallbackTests(APITestCase):
         self.reservation.refresh_from_db()
         self.assertEqual(self.reservation.status, Reservation.ReservationStatus.ACTIVE)
 
-    @patch('reservation.views.ZarinPal')
-    def test_callback_verification_failed(self, MockZarinPal):
-        mock_zarinpal_instance = MockZarinPal.return_value
-        mock_zarinpal_instance.verifications.verify.return_value = {"data": {"code": -51}, "errors": ["Invalid amount"]}
+    @patch(ZARINPAL_GATEWAY_PATH)
+    def test_callback_verification_failed(self, MockZarinpalGateway):
+        mock_gateway_instance = MockZarinpalGateway.return_value
+        # verify_payment should return (False, error_details) on failure
+        mock_gateway_instance.verify_payment.return_value = (False, {"code": -51, "message": "Invalid amount"})
 
         response = self.client.get(f"{self.callback_url}?Authority=TEST_CALLBACK_AUTH&Status=OK")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
