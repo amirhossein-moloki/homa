@@ -43,7 +43,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "djoser",
     "decouple",
-    "ratelimit",
 
     # local apps
     "admin_panel",
